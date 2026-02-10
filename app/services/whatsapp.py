@@ -123,9 +123,10 @@ async def send_template_message(
             },
         },
     }
+    
     if components:
         payload["template"]["components"] = components
-
+        
     async with httpx.AsyncClient(timeout=30) as client:
         try:
             response = await client.post(settings.whatsapp_api_url,
@@ -152,3 +153,116 @@ async def save_media_file(media_data: bytes, wa_id: str, filename: str) -> str:
         f.write(media_data)
     logger.info(f"Saved media to {file_path}")
     return file_path
+
+
+async def list_templates() -> list[dict]:
+    """List all message templates from Meta WABA."""
+    settings = get_settings()
+    headers = {"Authorization": f"Bearer {settings.meta_api_token}"}
+    url = f"https://graph.facebook.com/v21.0/{settings.meta_waba_id}/message_templates"
+
+    all_templates = []
+    async with httpx.AsyncClient(timeout=30) as client:
+        try:
+            params = {"limit": 100}
+            while url:
+                response = await client.get(url,
+                                            headers=headers,
+                                            params=params)
+                response.raise_for_status()
+                data = response.json()
+                all_templates.extend(data.get("data", []))
+                # Pagination
+                url = data.get("paging", {}).get("next")
+                params = {}  # next URL already has params
+            logger.info(f"Fetched {len(all_templates)} templates")
+            return all_templates
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Failed to list templates: {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Error listing templates: {e}")
+            raise
+
+
+async def create_template(
+    name: str,
+    category: str,
+    language: str,
+    header_text: str | None = None,
+    body_text: str = "",
+    footer_text: str | None = None,
+    buttons: list[dict] | None = None,
+) -> dict:
+    """Create a new message template via Meta Graph API."""
+    settings = get_settings()
+    headers = {
+        "Authorization": f"Bearer {settings.meta_api_token}",
+        "Content-Type": "application/json",
+    }
+    url = f"https://graph.facebook.com/v21.0/{settings.meta_waba_id}/message_templates"
+
+    components = []
+
+    if header_text:
+        components.append({
+            "type": "HEADER",
+            "format": "TEXT",
+            "text": header_text,
+        })
+
+    components.append({
+        "type": "BODY",
+        "text": body_text,
+    })
+
+    if footer_text:
+        components.append({
+            "type": "FOOTER",
+            "text": footer_text,
+        })
+
+    if buttons:
+        btn_component = {"type": "BUTTONS", "buttons": buttons}
+        components.append(btn_component)
+
+    payload = {
+        "name": name,
+        "category": category.upper(),
+        "language": language,
+        "components": components,
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        try:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            logger.info(f"Template '{name}' created: {result}")
+            return result
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Failed to create template: {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Error creating template: {e}")
+            raise
+
+
+async def delete_template(template_name: str) -> dict:
+    """Delete a message template by name."""
+    settings = get_settings()
+    headers = {"Authorization": f"Bearer {settings.meta_api_token}"}
+    url = f"https://graph.facebook.com/v21.0/{settings.meta_waba_id}/message_templates"
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        try:
+            response = await client.delete(url,
+                                           headers=headers,
+                                           params={"name": template_name})
+            response.raise_for_status()
+            result = response.json()
+            logger.info(f"Template '{template_name}' deleted")
+            return result
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Failed to delete template: {e.response.text}")
+            raise

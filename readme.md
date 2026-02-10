@@ -1,30 +1,80 @@
-Context
-Build a full-service WhatsApp AI agent for a car rental business from scratch. The agent handles bookings, availability checks, FAQs, document collection (license photos), and booking reminders -- all via natural WhatsApp conversation powered by an LLM.
-Tech Stack
+# WABA Templates & Flows — WhatsApp AI Car Rental Agent
 
-Backend: Python + FastAPI
-WhatsApp: Meta Cloud API (test number for dev)
-AI/LLM: Groq (llama-3.3-70b-versatile)
-Database: SQLite (via aiosqlite)
-HTTP client: httpx (async)
+A full-service WhatsApp Business AI agent for a car rental company, built on the **Meta WhatsApp Business API (WABA)** using the **Graph API v21.0**. The agent handles bookings, availability checks, FAQs, document collection, template messaging, and booking reminders — all through natural WhatsApp conversation powered by an LLM.
 
-Project Structure
+---
+
+## Meta WhatsApp Business Platform
+
+This project integrates with the following Meta WABA capabilities:
+
+### Graph API (Cloud API)
+All WhatsApp communication goes through the **Meta Graph API Cloud-hosted endpoints**:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /{phone-number-id}/messages` | Send text, template, and interactive messages |
+| `GET /{media-id}` | Retrieve media URL for downloading customer uploads |
+| `POST /{phone-number-id}/messages` (status) | Mark incoming messages as read |
+
+Authentication is via a **long-lived System User Access Token** passed as a Bearer token.
+
+### Message Templates
+WhatsApp Business requires pre-approved **message templates** for initiating conversations outside the 24-hour customer service window. This project supports sending template messages with dynamic body variables through:
+
+- A **REST endpoint** (`POST /ui/send-template`) for dispatching templates from the dashboard
+- A **UI form** on the admin dashboard for sending templates manually
+- Support for parameterized body variables (e.g. `{{1}}`, `{{2}}`)
+
+Templates are created and managed in the **Meta Business Manager** under *WhatsApp Manager > Message Templates* and must be approved before use.
+
+**Example — `demo` template with 2 body variables:**
+```
+Body: Your order {{1}} has been updated. Please {{2}}.
+Sample: Your order #12345 has been updated. Please try a redelivery.
+```
+
+### WhatsApp Flows
+WhatsApp Flows allow businesses to build structured, form-like interactions within WhatsApp (e.g. multi-step booking forms, surveys). While this project currently uses **LLM-driven natural conversation** for the booking flow, the architecture is designed to accommodate WhatsApp Flows for scenarios like:
+
+- Structured vehicle selection with dropdowns
+- Date picker–based booking forms
+- Customer registration flows
+- Feedback collection after rentals
+
+Flows are configured in the Meta Business Manager and triggered via interactive messages using the Graph API.
+
+---
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| Backend | Python 3.12 + FastAPI |
+| WhatsApp | Meta Cloud API (Graph API v21.0) |
+| AI / LLM | Groq (`llama-3.3-70b-versatile`) |
+| Database | SQLite via `aiosqlite` |
+| HTTP Client | `httpx` (async) |
+| Templating | Jinja2 (admin dashboard) |
+
+---
+
+## Project Structure
+
+```
 WABA_templates_flows/
 ├── app/
-│   ├── __init__.py
 │   ├── main.py                  # FastAPI app, lifespan, health endpoint
-│   ├── config.py                # pydantic-settings, env vars
+│   ├── config.py                # Pydantic-settings, env vars
 │   ├── database.py              # SQLite setup, table creation, query helpers
 │   ├── routers/
-│   │   ├── __init__.py
 │   │   ├── webhook.py           # GET (verify) + POST (incoming messages)
-│   │   └── admin.py             # Vehicle CRUD, booking management, stats
+│   │   ├── admin.py             # Vehicle CRUD, booking management, stats
+│   │   └── conversations_ui.py  # Web dashboard + template message sender
 │   ├── models/
-│   │   ├── __init__.py
 │   │   └── schemas.py           # Pydantic request/response models
 │   ├── services/
-│   │   ├── __init__.py
-│   │   ├── whatsapp.py          # Send messages, download media, mark read
+│   │   ├── whatsapp.py          # Send text/template messages, download media
 │   │   ├── groq_agent.py        # System prompt, tool-call loop, conversation orchestration
 │   │   ├── booking.py           # Create/cancel bookings, check availability
 │   │   ├── vehicle.py           # Vehicle queries
@@ -33,126 +83,158 @@ WABA_templates_flows/
 │   │   ├── reminders.py         # Background task for pickup/return reminders
 │   │   └── document.py          # Download & store license photos
 │   ├── tools/
-│   │   ├── __init__.py
-│   │   ├── definitions.py       # Groq tool schemas (check_availability, create_booking, etc.)
+│   │   ├── definitions.py       # Groq tool schemas (6 tools)
 │   │   └── handlers.py          # Tool dispatch map + handler functions
 │   ├── prompts/
-│   │   └── system_prompt.txt    # Agent system prompt with business info + guidelines
+│   │   └── system_prompt.txt    # Agent system prompt with business info
 │   └── data/
 │       └── seed_vehicles.py     # Populate sample vehicle inventory
-├── uploads/                     # Stored license photos organized by phone number
-├── .env.example                 # Template for required env vars
-├── requirements.txt             # 8 dependencies
-└── Makefile                     # Convenience: make run, make seed
-Database Schema (5 tables)
+├── uploads/                     # Stored license photos by phone number
+├── .env                         # Environment variables (not committed)
+├── .gitignore
+├── requirements.txt
+├── Makefile
+└── readme.md
+```
 
-vehicles - id, make, model, year, category (economy/midsize/suv/luxury/bakkie), license_plate, daily_rate, status
-customers - id, wa_id (WhatsApp number, unique), name, email, license_verified
-bookings - id, reference (e.g. "BK-A3F7"), customer_id, vehicle_id, pickup_date, return_date, total_days, total_price, status, reminder flags
-documents - id, customer_id, doc_type, file_path, wa_media_id
-conversations - id, wa_id, role, content, tool_call_id, created_at (indexed)
+---
 
-AI Agent Design
-The LLM acts as both the conversational interface AND the intent router via Groq's tool-calling:
-6 Tools the agent can call:
+## Database Schema
 
-check_availability(pickup_date, return_date, category?, vehicle_id?) - Find available vehicles
-create_booking(wa_id, customer_name, vehicle_id, pickup_date, return_date) - Book a vehicle
-get_customer_bookings(wa_id) - Look up customer's bookings
-cancel_booking(reference, wa_id) - Cancel a booking (with ownership verification)
-record_document(wa_id, doc_type, file_path) - Record uploaded license photo
-get_vehicle_details(vehicle_id) - Get specific vehicle info
+| Table | Key Columns |
+|-------|------------|
+| `vehicles` | id, make, model, year, category, license_plate, daily_rate, status |
+| `customers` | id, wa_id (WhatsApp number), name, email, license_verified |
+| `bookings` | id, reference, customer_id, vehicle_id, pickup/return dates, total_price, status, reminder flags |
+| `documents` | id, customer_id, doc_type, file_path, wa_media_id |
+| `conversations` | id, wa_id, role, content, tool_call_id, tool_calls, created_at |
 
-Agent loop: Load last 20 messages as context -> call Groq with system prompt + tools -> if tool call, execute and loop back -> if text response, send to customer. Max 5 iterations per message.
-System prompt includes: business info (hours, location, policies, pricing tiers), FAQ answers, conversation guidelines (short messages, no markdown, confirm dates before booking, never hallucinate data).
-Implementation Phases (build incrementally)
-Phase 1: Foundation
+---
 
-Project structure, requirements.txt, config.py, database.py (all CREATE TABLE)
-main.py with FastAPI app + lifespan + health check
-Webhook GET verification endpoint
-.env.example with all required vars
+## AI Agent Design
 
-Phase 2: WhatsApp Echo Bot
+The LLM acts as both the conversational interface and the intent router via **Groq's native tool-calling**:
 
-services/whatsapp.py - send_text_message(), mark_as_read() via httpx
-Webhook POST handler - parse incoming messages, echo them back
-Message deduplication (in-memory set of recent message IDs)
+### 6 Tools
 
-Phase 3: Database + Seed Data
+| Tool | Description |
+|------|-------------|
+| `check_availability` | Find available vehicles for given dates and optional category |
+| `create_booking` | Book a vehicle for a customer |
+| `get_customer_bookings` | Look up a customer's bookings |
+| `cancel_booking` | Cancel a booking with ownership verification |
+| `record_document` | Record an uploaded driver's license photo |
+| `get_vehicle_details` | Get details for a specific vehicle |
 
-Full database.py with async query helpers (fetch_all, fetch_one, execute)
-data/seed_vehicles.py - 10+ sample vehicles across all categories
-services/vehicle.py and services/customer.py
+### Agent Loop
+1. Load last 20 messages as context
+2. Call Groq with system prompt + tools
+3. If tool call → execute and loop back
+4. If text response → send to customer via WhatsApp
+5. Max 5 iterations per incoming message
 
-Phase 4: Groq Agent (basic conversation)
+---
 
-prompts/system_prompt.txt with business info and guidelines
-services/conversation.py - save/load message history
-services/groq_agent.py - initial version WITHOUT tools (FAQ-only)
-Wire webhook -> agent -> WhatsApp response
+## Setup
 
-Phase 5: Tool Calling (availability + booking)
+### 1. Prerequisites
+- Python 3.12+
+- A **Meta Developer Account** with a WhatsApp Business test number
+- A **Groq API key** ([console.groq.com](https://console.groq.com))
+- `ngrok` or similar tunnel for local webhook development
 
-tools/definitions.py with check_availability + create_booking schemas
-services/booking.py with business logic
-tools/handlers.py with dispatch map
-Add tool loop to groq_agent.py
+### 2. Clone & Install
 
-Phase 6: Tool Calling (lookup + cancellation)
+```bash
+git clone https://github.com/king-kanda/WABA_templates_flows.git
+cd WABA_templates_flows
+python -m venv .venv
+source .venv/bin/activate
+make install
+```
 
-Add get_customer_bookings, cancel_booking, get_vehicle_details tools
-Test full cycle: book -> check -> cancel
+### 3. Configure Environment
 
-Phase 7: Document Upload
+Create a `.env` file in the project root:
 
-services/whatsapp.py - add download_media()
-services/document.py - save files to uploads/{wa_id}/
-Detect image message types in webhook, download before calling agent
-Add record_document tool
+```env
+META_API_TOKEN=your_meta_api_token_here
+META_PHONE_NUMBER_ID=your_phone_number_id_here
+WEBHOOK_VERIFY_TOKEN=your_webhook_verify_token_here
+GROQ_API_KEY=your_groq_api_key_here
+ADMIN_API_KEY=your_admin_api_key_here
+DATABASE_PATH=data/car_rental.db
+UPLOADS_DIR=uploads
+LOG_LEVEL=INFO
+```
 
-Phase 8: Reminders
+### 4. Seed Database & Run
 
-services/reminders.py - async background loop (hourly)
-Send pickup reminders (day before) and return reminders (day before)
-Hook into FastAPI lifespan
+```bash
+make seed    # Populate 13 sample vehicles
+make run     # Start server on port 8000
+```
 
-Phase 9: Admin Endpoints
+### 5. Configure Meta Webhook
 
-routers/admin.py - vehicles CRUD, bookings list/cancel, customer list, stats
-models/schemas.py - Pydantic validation models
-API key auth via header dependency
+1. Expose your local server: `ngrok http 8000`
+2. In **Meta Developer Dashboard** → WhatsApp → Configuration:
+   - **Callback URL:** `https://your-ngrok-url/webhook`
+   - **Verify Token:** same as `WEBHOOK_VERIFY_TOKEN` in `.env`
+   - Subscribe to: `messages`
 
-Phase 10: Polish
+### 6. Create Message Templates
 
-Error handling, logging, edge cases (empty messages, unsupported types)
-Rate limiting per wa_id
-Makefile convenience targets
+In **Meta Business Manager** → WhatsApp Manager → Message Templates:
 
-Dependencies (requirements.txt)
-fastapi>=0.115.0
-uvicorn[standard]>=0.32.0
-aiosqlite>=0.20.0
-httpx>=0.27.0
-groq>=0.11.0
-pydantic-settings>=2.6.0
-python-dotenv>=1.0.0
-python-multipart>=0.0.12
-Key Design Decisions
+1. Create a template named `demo`
+2. Add body text with variables `{{1}}` and `{{2}}`
+3. Submit for approval
+4. Once approved, send from the dashboard at `/ui`
 
-No ORM - Raw SQL via aiosqlite. 5 simple tables don't need SQLAlchemy overhead
-No LangChain - Groq SDK has native tool calling. Agent loop is ~30 lines
-LLM as intent router - No separate NLU layer. Adding features = adding tool definitions
-Conversation in DB - Survives restarts, provides audit trail, spans multi-day conversations
-httpx - Async HTTP to avoid blocking FastAPI's event loop
+---
 
-Verification
+## Endpoints
 
-Run uvicorn app.main:app --reload and hit /health
-Expose via ngrok, configure webhook in Meta dashboard, verify GET succeeds
-Send WhatsApp message -> get echo back (Phase 2)
-Chat with agent about FAQs -> get contextual answers (Phase 4)
-Full booking flow via WhatsApp: check availability -> book -> look up -> cancel (Phases 5-6)
-Send license photo -> confirm saved to uploads/ (Phase 7)
-Create booking for tomorrow -> verify reminder fires (Phase 8)
-Hit admin endpoints with curl/Postman (Phase 9)
+### Public
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check |
+| GET | `/webhook` | Meta webhook verification |
+| POST | `/webhook` | Incoming WhatsApp messages |
+
+### Dashboard (UI)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/ui` | Conversations dashboard + template sender |
+| GET | `/ui/conversations/{wa_id}` | View full conversation thread |
+| POST | `/ui/send-template` | Send a template message |
+
+### Admin (requires `X-API-Key` header)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/admin/vehicles` | List all vehicles |
+| POST | `/admin/vehicles` | Add a vehicle |
+| PUT | `/admin/vehicles/{id}` | Update a vehicle |
+| DELETE | `/admin/vehicles/{id}` | Delete a vehicle |
+| GET | `/admin/bookings` | List all bookings |
+| POST | `/admin/bookings/cancel` | Cancel a booking |
+| GET | `/admin/customers` | List all customers |
+| GET | `/admin/stats` | Dashboard statistics |
+
+---
+
+## Key Design Decisions
+
+- **No ORM** — Raw SQL via `aiosqlite`. 5 simple tables don't need SQLAlchemy overhead
+- **No LangChain** — Groq SDK has native tool calling. The agent loop is ~30 lines
+- **LLM as intent router** — No separate NLU layer. Adding features = adding tool definitions
+- **Conversation in DB** — Survives restarts, provides audit trail, spans multi-day conversations
+- **httpx** — Async HTTP to avoid blocking FastAPI's event loop
+- **Message deduplication** — In-memory dedup with TTL + per-message processing locks to prevent double responses from Meta's webhook retries
+
+---
+
+## License
+
+MIT
