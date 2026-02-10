@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     # Meta / WhatsApp Cloud API
     meta_api_token: str = ""
     meta_phone_number_id: str = ""
-    meta_waba_id: str = ""  # WhatsApp Business Account ID
+    meta_waba_business_account_id: str = ""  # WhatsApp Business Account ID
     webhook_verify_token: str = "verify_token"
 
     # Groq

@@ -123,10 +123,10 @@ async def send_template_message(
             },
         },
     }
-    
+
     if components:
         payload["template"]["components"] = components
-        
+
     async with httpx.AsyncClient(timeout=30) as client:
         try:
             response = await client.post(settings.whatsapp_api_url,
@@ -159,7 +159,7 @@ async def list_templates() -> list[dict]:
     """List all message templates from Meta WABA."""
     settings = get_settings()
     headers = {"Authorization": f"Bearer {settings.meta_api_token}"}
-    url = f"https://graph.facebook.com/v21.0/{settings.meta_waba_id}/message_templates"
+    url = f"https://graph.facebook.com/v21.0/{settings.meta_waba_business_account_id}/message_templates"
 
     all_templates = []
     async with httpx.AsyncClient(timeout=30) as client:
@@ -200,7 +200,7 @@ async def create_template(
         "Authorization": f"Bearer {settings.meta_api_token}",
         "Content-Type": "application/json",
     }
-    url = f"https://graph.facebook.com/v21.0/{settings.meta_waba_id}/message_templates"
+    url = f"https://graph.facebook.com/v21.0/{settings.meta_waba_business_account_id}/message_templates"
 
     components = []
 
@@ -252,7 +252,7 @@ async def delete_template(template_name: str) -> dict:
     """Delete a message template by name."""
     settings = get_settings()
     headers = {"Authorization": f"Bearer {settings.meta_api_token}"}
-    url = f"https://graph.facebook.com/v21.0/{settings.meta_waba_id}/message_templates"
+    url = f"https://graph.facebook.com/v21.0/{settings.meta_waba_business_account_id}/message_templates"
 
     async with httpx.AsyncClient(timeout=30) as client:
         try:
