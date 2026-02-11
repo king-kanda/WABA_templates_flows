@@ -106,15 +106,27 @@ async def send_template_message(
 
     if body_parameters:
         components.append({
-            "type": "body",
-            "parameters": [{"type": "text", "text": p} for p in body_parameters],
+            "type":
+            "body",
+            "parameters": [{
+                "type": "text",
+                "text": p
+            } for p in body_parameters],
         })
 
     components.append({
-        "type": "button",
-        "sub_type": "flow",
-        "index": "0",
-        "parameters": [{"type": "action", "action": {"flow_token": flow_token}}],
+        "type":
+        "button",
+        "sub_type":
+        "flow",
+        "index":
+        "0",
+        "parameters": [{
+            "type": "action",
+            "action": {
+                "flow_token": flow_token
+            }
+        }],
     })
 
     payload = {
@@ -251,6 +263,94 @@ async def create_template(
             raise
         except Exception as e:
             logger.error(f"Error creating template: {e}")
+            raise
+
+
+async def send_interactive_list(to: str) -> dict:
+    """Send an interactive list message with DriveEasy service options."""
+    settings = get_settings()
+    headers = {
+        "Authorization": f"Bearer {settings.meta_api_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "header": {
+                "type": "text",
+                "text": "What would you like today? 🚗"
+            },
+            "body": {
+                "text": "Choose one service to proceed:"
+            },
+            "footer": {
+                "text": "DriveEasy Car Services"
+            },
+            "action": {
+                "button":
+                "Select Service",
+                "sections": [{
+                    "title":
+                    "Service Options",
+                    "rows": [
+                        {
+                            "id":
+                            "full_financing",
+                            "title":
+                            "Full Financing 💰",
+                            "description":
+                            "Complete financing with easy installments.",
+                        },
+                        {
+                            "id":
+                            "top_up",
+                            "title":
+                            "Top Up 🔝",
+                            "description":
+                            "Add extra funds or upgrade your package.",
+                        },
+                        {
+                            "id":
+                            "vehicle_inspection",
+                            "title":
+                            "Vehicle Inspection 🔍",
+                            "description":
+                            "Professional check-up and certification.",
+                        },
+                        {
+                            "id": "chauffer",
+                            "title": "Chauffeur Service 👨‍✈️",
+                            "description":
+                            "Professional driver – relax and ride.",
+                        },
+                        {
+                            "id": "rent_a_car",
+                            "title": "Rent a Car 🚙",
+                            "description":
+                            "Short or long-term rental available.",
+                        },
+                    ],
+                }],
+            },
+        },
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        try:
+            response = await client.post(settings.whatsapp_api_url,
+                                         json=payload,
+                                         headers=headers)
+            response.raise_for_status()
+            logger.info(f"Interactive list sent to {to}")
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"Failed to send interactive list to {to}: {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Error sending interactive list to {to}: {e}")
             raise
 
 

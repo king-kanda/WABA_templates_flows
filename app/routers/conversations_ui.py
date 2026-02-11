@@ -4,7 +4,7 @@ import logging
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
 from app.services.conversation import get_all_conversations, get_conversation_messages
-from app.services.whatsapp import send_template_message, list_templates, create_template, delete_template
+from app.services.whatsapp import send_template_message, list_templates, create_template, delete_template, send_interactive_list
 from app.database import fetch_one
 
 logger = logging.getLogger(__name__)
@@ -79,6 +79,13 @@ SHELL_HTML = """
                 hx-get="/ui/tab/send-template" hx-target="#content" hx-swap="innerHTML"
                 onclick="setActive(this)">
             Send Template
+        </button>
+        <button class="tab-btn flex-1 py-3 text-sm font-semibold text-gray-500 border-b-[3px] border-transparent
+                       hover:text-wa hover:bg-gray-50 transition-all"
+                data-tab="interactive"
+                hx-get="/ui/tab/send-interactive" hx-target="#content" hx-swap="innerHTML"
+                onclick="setActive(this)">
+            Send List
         </button>
     </nav>
 
@@ -432,8 +439,72 @@ SEND_TEMPLATE_TAB = """
 </div>
 """
 
+# ──────────────────────────── TAB: SEND INTERACTIVE LIST ────────────────────────────
+
+SEND_INTERACTIVE_TAB = """
+<div class="bg-white rounded-xl shadow-sm p-5">
+    <h3 class="text-sm font-semibold text-wa mb-4">Send Interactive Service List</h3>
+    <div id="interactiveResult"></div>
+    <form class="grid grid-cols-1 gap-3"
+          hx-post="/ui/api/send-interactive" hx-target="#interactiveResult" hx-swap="innerHTML"
+          hx-disabled-elt="button[type=submit]">
+        <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Recipient Phone Number</label>
+            <input type="text" name="phone_number" placeholder="e.g. 27821234567" required
+                   class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
+                          focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors">
+            <p class="text-[11px] text-gray-400 mt-1">With country code, no + or spaces</p>
+        </div>
+
+        <!-- Preview -->
+        <div class="mt-2">
+            <label class="block text-xs font-medium text-gray-500 mb-2">Preview</label>
+            <div class="bg-wa-bg rounded-lg p-4 border border-gray-200">
+                <div class="bg-white rounded-lg shadow-sm p-3 max-w-xs">
+                    <div class="font-semibold text-sm text-gray-800 mb-1">What would you like today? \U0001f697</div>
+                    <div class="text-xs text-gray-600 mb-2">Choose one service to proceed:</div>
+                    <div class="space-y-1.5 mb-3">
+                        <div class="flex items-center gap-2 text-xs text-gray-700">
+                            <span class="w-5 h-5 rounded-full bg-wa/10 text-wa text-[10px] font-bold flex items-center justify-center">1</span>
+                            Full Financing \U0001f4b0
+                        </div>
+                        <div class="flex items-center gap-2 text-xs text-gray-700">
+                            <span class="w-5 h-5 rounded-full bg-wa/10 text-wa text-[10px] font-bold flex items-center justify-center">2</span>
+                            Top Up \U0001f51d
+                        </div>
+                        <div class="flex items-center gap-2 text-xs text-gray-700">
+                            <span class="w-5 h-5 rounded-full bg-wa/10 text-wa text-[10px] font-bold flex items-center justify-center">3</span>
+                            Vehicle Inspection \U0001f50d
+                        </div>
+                        <div class="flex items-center gap-2 text-xs text-gray-700">
+                            <span class="w-5 h-5 rounded-full bg-wa/10 text-wa text-[10px] font-bold flex items-center justify-center">4</span>
+                            Chauffeur Service \U0001f468\u200d\u2708\ufe0f
+                        </div>
+                        <div class="flex items-center gap-2 text-xs text-gray-700">
+                            <span class="w-5 h-5 rounded-full bg-wa/10 text-wa text-[10px] font-bold flex items-center justify-center">5</span>
+                            Rent a Car \U0001f699
+                        </div>
+                    </div>
+                    <div class="text-[10px] text-gray-400">DriveEasy Car Services</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="text-right mt-2">
+            <button type="submit"
+                    class="bg-wa hover:bg-wa-dark text-white font-semibold text-sm px-6 py-2.5
+                           rounded-md transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
+                Send Interactive List
+                <span class="htmx-indicator inline-block w-4 h-4 border-2 border-white/30 border-t-white
+                             rounded-full spinner ml-1.5 align-middle"></span>
+            </button>
+        </div>
+    </form>
+</div>
+"""
 
 # ════════════════════════════ ROUTES ════════════════════════════
+
 
 @router.get("", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -445,7 +516,8 @@ async def dashboard(request: Request):
 async def tab_conversations():
     conversations = await get_all_conversations()
 
-    total_messages = await fetch_one("SELECT COUNT(*) as count FROM conversations")
+    total_messages = await fetch_one(
+        "SELECT COUNT(*) as count FROM conversations")
     total_bookings = await fetch_one("SELECT COUNT(*) as count FROM bookings")
     revenue = await fetch_one(
         "SELECT COALESCE(SUM(total_price), 0) as total FROM bookings WHERE status != 'cancelled'"
@@ -459,18 +531,22 @@ async def tab_conversations():
 
     from jinja2 import Template
     t = Template(CONVERSATIONS_TAB)
-    return HTMLResponse(content=t.render(conversations=conversations, stats=stats))
+    return HTMLResponse(
+        content=t.render(conversations=conversations, stats=stats))
 
 
 @router.get("/tab/chat/{wa_id}", response_class=HTMLResponse)
 async def tab_chat(wa_id: str):
     messages = await get_conversation_messages(wa_id, limit=500)
-    customer = await fetch_one("SELECT name FROM customers WHERE wa_id = ?", (wa_id,))
-    customer_name = customer["name"] if customer and customer.get("name") else None
+    customer = await fetch_one("SELECT name FROM customers WHERE wa_id = ?",
+                               (wa_id, ))
+    customer_name = customer["name"] if customer and customer.get(
+        "name") else None
 
     from jinja2 import Template
     t = Template(CHAT_DETAIL_TAB)
-    return HTMLResponse(content=t.render(wa_id=wa_id, customer_name=customer_name, messages=messages))
+    return HTMLResponse(content=t.render(
+        wa_id=wa_id, customer_name=customer_name, messages=messages))
 
 
 @router.get("/tab/templates", response_class=HTMLResponse)
@@ -497,7 +573,8 @@ async def tab_templates():
 
     from jinja2 import Template
     t = Template(TEMPLATES_TAB)
-    return HTMLResponse(content=t.render(templates=templates_data, error=error))
+    return HTMLResponse(
+        content=t.render(templates=templates_data, error=error))
 
 
 @router.get("/tab/create-template", response_class=HTMLResponse)
@@ -510,16 +587,22 @@ async def tab_send_template():
     return HTMLResponse(content=SEND_TEMPLATE_TAB)
 
 
+@router.get("/tab/send-interactive", response_class=HTMLResponse)
+async def tab_send_interactive():
+    return HTMLResponse(content=SEND_INTERACTIVE_TAB)
+
+
 # ──── API actions (return HTML snippets for htmx) ────
+
 
 @router.post("/api/templates", response_class=HTMLResponse)
 async def api_create_template(
-    name: str = Form(...),
-    category: str = Form("UTILITY"),
-    language: str = Form("en_US"),
-    header_text: str = Form(""),
-    body_text: str = Form(...),
-    footer_text: str = Form(""),
+        name: str = Form(...),
+        category: str = Form("UTILITY"),
+        language: str = Form("en_US"),
+        header_text: str = Form(""),
+        body_text: str = Form(...),
+        footer_text: str = Form(""),
 ):
     try:
         result = await create_template(
@@ -534,24 +617,23 @@ async def api_create_template(
         return HTMLResponse(
             '<div class="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-4 text-sm">'
             f'Template <b>{name}</b> created successfully! ID: {tid}. '
-            f'It will be reviewed by Meta before becoming active.</div>'
-        )
+            f'It will be reviewed by Meta before becoming active.</div>')
     except Exception as e:
         return HTMLResponse(
             f'<div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">'
-            f'Failed to create template: {e}</div>'
-        )
+            f'Failed to create template: {e}</div>')
 
 
 @router.post("/api/send-template", response_class=HTMLResponse)
 async def api_send_template(
-    template_name: str = Form(...),
-    phone_number: str = Form(...),
-    language: str = Form("en_US"),
-    variables: str = Form(""),
+        template_name: str = Form(...),
+        phone_number: str = Form(...),
+        language: str = Form("en_US"),
+        variables: str = Form(""),
 ):
     try:
-        body_params = [v.strip() for v in variables.split(",") if v.strip()] if variables.strip() else None
+        body_params = [v.strip() for v in variables.split(",")
+                       if v.strip()] if variables.strip() else None
         await send_template_message(
             to=phone_number,
             template_name=template_name,
@@ -565,8 +647,21 @@ async def api_send_template(
     except Exception as e:
         return HTMLResponse(
             f'<div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">'
-            f'Failed to send: {e}</div>'
+            f'Failed to send: {e}</div>')
+
+
+@router.post("/api/send-interactive", response_class=HTMLResponse)
+async def api_send_interactive(phone_number: str = Form(...), ):
+    try:
+        await send_interactive_list(to=phone_number)
+        return HTMLResponse(
+            '<div class="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-4 text-sm">'
+            f'Interactive service list sent to <b>{phone_number}</b> successfully!</div>'
         )
+    except Exception as e:
+        return HTMLResponse(
+            f'<div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">'
+            f'Failed to send interactive list: {e}</div>')
 
 
 @router.delete("/api/templates/{template_name}", response_class=HTMLResponse)
@@ -576,6 +671,5 @@ async def api_delete_template(template_name: str):
     except Exception as e:
         return HTMLResponse(
             f'<div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">'
-            f'Delete failed: {e}</div>'
-        )
+            f'Delete failed: {e}</div>')
     return await tab_templates()
