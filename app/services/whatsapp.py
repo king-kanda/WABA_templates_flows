@@ -92,6 +92,7 @@ async def send_template_message(
     to: str,
     template_name: str,
     language_code: str = "en_US",
+    flow_token: str = "unused",
     body_parameters: list[str] | None = None,
 ):
     """Send a template message via WhatsApp Cloud API."""
@@ -102,15 +103,19 @@ async def send_template_message(
     }
 
     components = []
+
     if body_parameters:
         components.append({
-            "type":
-            "body",
-            "parameters": [{
-                "type": "text",
-                "text": p
-            } for p in body_parameters],
+            "type": "body",
+            "parameters": [{"type": "text", "text": p} for p in body_parameters],
         })
+
+    components.append({
+        "type": "button",
+        "sub_type": "flow",
+        "index": "0",
+        "parameters": [{"type": "action", "action": {"flow_token": flow_token}}],
+    })
 
     payload = {
         "messaging_product": "whatsapp",
@@ -129,6 +134,7 @@ async def send_template_message(
 
     async with httpx.AsyncClient(timeout=30) as client:
         try:
+            logger.info(f"Payload: {payload}")
             response = await client.post(settings.whatsapp_api_url,
                                          json=payload,
                                          headers=headers)

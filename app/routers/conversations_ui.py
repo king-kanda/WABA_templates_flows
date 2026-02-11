@@ -1,8 +1,7 @@
-"""HTMX-powered dashboard with tabs: Conversations, Templates, Create Template, Send Template."""
+"""HTMX + Tailwind CSS dashboard — Conversations, Templates, Create Template, Send Template."""
 
 import logging
-import json
-from fastapi import APIRouter, Request, Form, Query
+from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
 from app.services.conversation import get_all_conversations, get_conversation_messages
 from app.services.whatsapp import send_template_message, list_templates, create_template, delete_template
@@ -11,248 +10,106 @@ from app.database import fetch_one
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ui", tags=["ui"])
 
-# ──────────────────────────── SHELL (tabs + layout) ────────────────────────────
+# ──────────────────────────── SHELL ────────────────────────────
 
 SHELL_HTML = """
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DriveEasy — WABA Dashboard</title>
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        wa: { DEFAULT: '#008069', light: '#00a884', dark: '#006e5a', bg: '#efeae2', bubble: '#d9fdd3' }
+                    }
+                }
+            }
+        }
+    </script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f0f2f5;
-            color: #111b21;
-        }
-        /* ── header ── */
-        .header {
-            background: #008069;
-            color: white;
-            padding: 14px 24px;
-            box-shadow: 0 1px 3px rgba(0,0,0,.12);
-            position: sticky; top: 0; z-index: 100;
-        }
-        .header h1 { font-size: 18px; font-weight: 700; }
-        .header .sub { font-size: 12px; opacity: .8; margin-top: 2px; }
-
-        /* ── tabs ── */
-        .tab-bar {
-            display: flex;
-            background: white;
-            border-bottom: 2px solid #e9edef;
-            position: sticky; top: 52px; z-index: 99;
-        }
-        .tab-btn {
-            flex: 1;
-            padding: 12px 0;
-            text-align: center;
-            font-size: 13px;
-            font-weight: 600;
-            color: #667781;
-            cursor: pointer;
-            border: none;
-            background: none;
-            border-bottom: 3px solid transparent;
-            transition: all .15s;
-        }
-        .tab-btn:hover { color: #008069; background: #f5f6f6; }
-        .tab-btn.active { color: #008069; border-bottom-color: #008069; }
-
-        /* ── content ── */
-        .tab-content {
-            max-width: 960px;
-            margin: 0 auto;
-            padding: 20px 16px;
-            min-height: 60vh;
-        }
-
-        /* ── shared card ── */
-        .card {
-            background: white;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 16px;
-            box-shadow: 0 1px 3px rgba(0,0,0,.06);
-        }
-        .card h3 {
-            font-size: 15px; font-weight: 600; margin-bottom: 14px; color: #008069;
-        }
-
-        /* ── stats row ── */
-        .stats { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 16px; }
-        .stat { text-align: center; }
-        .stat-val { font-size: 22px; font-weight: 700; color: #008069; }
-        .stat-lbl { font-size: 11px; color: #667781; margin-top: 2px; }
-
-        /* ── form grid ── */
-        .form-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-        }
-        .form-grid .full { grid-column: 1 / -1; }
-        .form-grid label {
-            display: block; font-size: 12px; font-weight: 500; color: #667781; margin-bottom: 4px;
-        }
-        .form-grid input,
-        .form-grid select,
-        .form-grid textarea {
-            width: 100%; padding: 9px 12px; border: 1px solid #e0e0e0;
-            border-radius: 6px; font-size: 14px; outline: none;
-            font-family: inherit; transition: border-color .15s;
-        }
-        .form-grid input:focus,
-        .form-grid select:focus,
-        .form-grid textarea:focus { border-color: #008069; }
-        .form-grid textarea { resize: vertical; min-height: 80px; }
-        .hint { font-size: 11px; color: #9aa0a6; margin-top: 3px; }
-
-        /* ── buttons ── */
-        .btn {
-            display: inline-block; padding: 10px 24px; border: none; border-radius: 6px;
-            font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s;
-        }
-        .btn-primary { background: #008069; color: white; }
-        .btn-primary:hover { background: #006e5a; }
-        .btn-danger { background: #dc3545; color: white; }
-        .btn-danger:hover { background: #c82333; }
-        .btn-sm { padding: 5px 12px; font-size: 12px; }
-        .btn:disabled { opacity: .6; cursor: not-allowed; }
-
-        /* ── alerts ── */
-        .alert {
-            padding: 10px 16px; border-radius: 6px; margin-bottom: 14px; font-size: 13px;
-        }
-        .alert-ok { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .alert-err { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-
-        /* ── search ── */
-        .search-box {
-            width: 100%; padding: 10px 16px; border: none; border-radius: 8px;
-            background: white; font-size: 14px; margin-bottom: 14px; outline: none;
-            box-shadow: 0 1px 2px rgba(0,0,0,.08);
-        }
-        .search-box:focus { box-shadow: 0 0 0 2px #008069; }
-
-        /* ── conversation list ── */
-        .conv-item {
-            background: white; padding: 13px 18px; display: flex; align-items: center;
-            gap: 14px; cursor: pointer; border-radius: 8px; text-decoration: none;
-            color: inherit; transition: background .15s; margin-bottom: 2px;
-        }
-        .conv-item:hover { background: #f5f6f6; }
-        .avatar {
-            width: 44px; height: 44px; border-radius: 50%; display: flex;
-            align-items: center; justify-content: center; font-size: 18px;
-            color: #fff; font-weight: 600; flex-shrink: 0;
-        }
-        .av-a{background:#00a884}.av-b{background:#53bdeb}.av-c{background:#ff6b6b}.av-d{background:#ffa726}.av-e{background:#7c4dff}
-        .conv-info { flex: 1; min-width: 0; }
-        .conv-name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .conv-preview { font-size: 12px; color: #667781; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .conv-meta { text-align: right; flex-shrink: 0; }
-        .conv-time { font-size: 11px; color: #667781; }
-        .badge { background: #25d366; color: white; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; margin-top: 4px; display: inline-block; }
-
-        /* ── template table ── */
-        .tpl-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        .tpl-table th { text-align: left; font-size: 11px; text-transform: uppercase; color: #667781; padding: 8px 10px; border-bottom: 2px solid #e9edef; }
-        .tpl-table td { padding: 10px; border-bottom: 1px solid #f0f2f5; vertical-align: top; }
-        .tpl-table tr:hover td { background: #f9fafb; }
-        .status-badge {
-            display: inline-block; padding: 2px 8px; border-radius: 10px;
-            font-size: 11px; font-weight: 600; text-transform: uppercase;
-        }
-        .st-approved { background: #d4edda; color: #155724; }
-        .st-rejected { background: #f8d7da; color: #721c24; }
-        .st-pending { background: #fff3cd; color: #856404; }
-        .st-other { background: #e9edef; color: #667781; }
-
-        /* ── chat view ── */
-        .chat-header {
-            background: #008069; color: white; padding: 12px 20px;
-            display: flex; align-items: center; gap: 12px; border-radius: 10px 10px 0 0;
-        }
-        .chat-header .back { color: white; text-decoration: none; font-size: 20px; cursor: pointer; }
-        .chat-body {
-            background: #efeae2; padding: 16px 20px; max-height: 60vh;
-            overflow-y: auto; border-radius: 0 0 10px 10px;
-        }
-        .msg {
-            max-width: 70%; margin-bottom: 4px; padding: 8px 12px;
-            border-radius: 8px; font-size: 13px; line-height: 1.45;
-            word-wrap: break-word; box-shadow: 0 1px 1px rgba(0,0,0,.06);
-        }
-        .msg-user { background: #d9fdd3; margin-left: auto; border-top-right-radius: 0; }
-        .msg-ai { background: white; margin-right: auto; border-top-left-radius: 0; }
-        .msg-tool {
-            background: #fff3cd; margin-right: auto; border-top-left-radius: 0;
-            font-family: monospace; font-size: 11px; max-width: 85%;
-            border-left: 3px solid #ffc107;
-        }
-        .msg-role { font-size: 10px; text-transform: uppercase; font-weight: 600; opacity: .55; margin-bottom: 2px; letter-spacing: .3px; }
-        .msg-time { font-size: 10px; color: #667781; text-align: right; margin-top: 3px; }
-        .date-sep { text-align: center; margin: 14px 0; }
-        .date-sep span { background: #e1f3fb; color: #54656f; font-size: 11px; padding: 4px 12px; border-radius: 8px; }
-
-        /* ── spinner ── */
         .htmx-indicator { display: none; }
         .htmx-request .htmx-indicator { display: inline-block; }
-        .spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid #ddd; border-top-color: #008069; border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle; margin-left: 6px; }
         @keyframes spin { to { transform: rotate(360deg); } }
-
-        /* empty */
-        .empty { text-align: center; padding: 50px 20px; color: #667781; }
-        .empty h4 { color: #111b21; margin-bottom: 6px; }
+        .spinner { animation: spin .6s linear infinite; }
+        /* custom scrollbar */
+        .chat-scroll::-webkit-scrollbar { width: 6px; }
+        .chat-scroll::-webkit-scrollbar-thumb { background: #c5c5c5; border-radius: 3px; }
     </style>
 </head>
-<body>
-    <div class="header">
-        <h1>DriveEasy &mdash; WABA Dashboard</h1>
-        <div class="sub">WhatsApp Business API &middot; Templates &middot; Flows</div>
-    </div>
+<body class="bg-gray-100 font-sans text-gray-900 min-h-full">
 
-    <div class="tab-bar" id="tabBar">
-        <button class="tab-btn active" data-tab="conversations"
+    <!-- Header -->
+    <header class="bg-wa text-white px-6 py-3.5 sticky top-0 z-50 shadow-md">
+        <h1 class="text-lg font-bold tracking-tight">DriveEasy &mdash; WABA Dashboard</h1>
+        <p class="text-xs text-white/70 mt-0.5">WhatsApp Business API &middot; Templates &middot; Flows</p>
+    </header>
+
+    <!-- Tab Bar -->
+    <nav class="flex bg-white border-b-2 border-gray-200 sticky top-[52px] z-40" id="tabBar">
+        <button class="tab-btn flex-1 py-3 text-sm font-semibold text-gray-500 border-b-[3px] border-transparent
+                       hover:text-wa hover:bg-gray-50 transition-all active"
+                data-tab="conversations"
                 hx-get="/ui/tab/conversations" hx-target="#content" hx-swap="innerHTML"
                 onclick="setActive(this)">
             Conversations
         </button>
-        <button class="tab-btn" data-tab="templates"
+        <button class="tab-btn flex-1 py-3 text-sm font-semibold text-gray-500 border-b-[3px] border-transparent
+                       hover:text-wa hover:bg-gray-50 transition-all"
+                data-tab="templates"
                 hx-get="/ui/tab/templates" hx-target="#content" hx-swap="innerHTML"
                 onclick="setActive(this)">
             Templates
         </button>
-        <button class="tab-btn" data-tab="create"
+        <button class="tab-btn flex-1 py-3 text-sm font-semibold text-gray-500 border-b-[3px] border-transparent
+                       hover:text-wa hover:bg-gray-50 transition-all"
+                data-tab="create"
                 hx-get="/ui/tab/create-template" hx-target="#content" hx-swap="innerHTML"
                 onclick="setActive(this)">
             Create Template
         </button>
-        <button class="tab-btn" data-tab="send"
+        <button class="tab-btn flex-1 py-3 text-sm font-semibold text-gray-500 border-b-[3px] border-transparent
+                       hover:text-wa hover:bg-gray-50 transition-all"
+                data-tab="send"
                 hx-get="/ui/tab/send-template" hx-target="#content" hx-swap="innerHTML"
                 onclick="setActive(this)">
             Send Template
         </button>
-    </div>
+    </nav>
 
-    <div class="tab-content" id="content"
-         hx-get="/ui/tab/conversations" hx-trigger="load" hx-swap="innerHTML">
-        <div style="text-align:center;padding:40px"><span class="spinner"></span> Loading...</div>
-    </div>
+    <!-- Content -->
+    <main class="max-w-4xl mx-auto px-4 py-5 min-h-[60vh]" id="content"
+          hx-get="/ui/tab/conversations" hx-trigger="load" hx-swap="innerHTML">
+        <div class="text-center py-10">
+            <span class="inline-block w-5 h-5 border-2 border-gray-300 border-t-wa rounded-full spinner"></span>
+            <span class="ml-2 text-gray-500 text-sm">Loading...</span>
+        </div>
+    </main>
 
     <script>
         function setActive(el) {
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            el.classList.add('active');
+            document.querySelectorAll('.tab-btn').forEach(b => {
+                b.classList.remove('active');
+                b.classList.remove('text-wa', 'border-wa');
+                b.classList.add('text-gray-500', 'border-transparent');
+            });
+            el.classList.add('active', 'text-wa', 'border-wa');
+            el.classList.remove('text-gray-500', 'border-transparent');
         }
+        // init first tab
+        document.addEventListener('DOMContentLoaded', () => {
+            const first = document.querySelector('.tab-btn.active');
+            if (first) { first.classList.add('text-wa', 'border-wa'); first.classList.remove('text-gray-500', 'border-transparent'); }
+        });
         function filterConvs() {
             const q = document.getElementById('convSearch').value.toLowerCase();
-            document.querySelectorAll('.conv-item').forEach(i => {
-                i.style.display = (i.dataset.name||'').toLowerCase().includes(q) ? '' : 'none';
+            document.querySelectorAll('[data-conv]').forEach(i => {
+                i.style.display = (i.dataset.conv||'').toLowerCase().includes(q) ? '' : 'none';
             });
         }
     </script>
@@ -263,36 +120,61 @@ SHELL_HTML = """
 # ──────────────────────────── TAB: CONVERSATIONS ────────────────────────────
 
 CONVERSATIONS_TAB = """
-<div class="stats">
-    <div class="stat"><div class="stat-val">{{ stats.total_conversations }}</div><div class="stat-lbl">Conversations</div></div>
-    <div class="stat"><div class="stat-val">{{ stats.total_messages }}</div><div class="stat-lbl">Messages</div></div>
-    <div class="stat"><div class="stat-val">{{ stats.total_bookings }}</div><div class="stat-lbl">Bookings</div></div>
-    <div class="stat"><div class="stat-val">R{{ stats.total_revenue }}</div><div class="stat-lbl">Revenue</div></div>
+<!-- Stats -->
+<div class="flex flex-wrap gap-6 mb-5">
+    <div class="text-center">
+        <div class="text-2xl font-bold text-wa">{{ stats.total_conversations }}</div>
+        <div class="text-[11px] text-gray-500 mt-0.5">Conversations</div>
+    </div>
+    <div class="text-center">
+        <div class="text-2xl font-bold text-wa">{{ stats.total_messages }}</div>
+        <div class="text-[11px] text-gray-500 mt-0.5">Messages</div>
+    </div>
+    <div class="text-center">
+        <div class="text-2xl font-bold text-wa">{{ stats.total_bookings }}</div>
+        <div class="text-[11px] text-gray-500 mt-0.5">Bookings</div>
+    </div>
+    <div class="text-center">
+        <div class="text-2xl font-bold text-wa">R{{ stats.total_revenue }}</div>
+        <div class="text-[11px] text-gray-500 mt-0.5">Revenue</div>
+    </div>
 </div>
 
-<input type="text" class="search-box" id="convSearch" placeholder="Search conversations..." oninput="filterConvs()">
+<!-- Search -->
+<input type="text" id="convSearch" placeholder="Search conversations..."
+       oninput="filterConvs()"
+       class="w-full px-4 py-2.5 rounded-lg bg-white shadow-sm text-sm outline-none
+              focus:ring-2 focus:ring-wa/40 mb-4 border border-gray-200">
 
 {% if conversations %}
+    <div class="space-y-0.5">
+    {% set colors = ['bg-wa-light', 'bg-sky-400', 'bg-red-400', 'bg-amber-500', 'bg-violet-500'] %}
     {% for c in conversations %}
-    <div class="conv-item" data-name="{{ c.customer_name or c.wa_id }}"
-         hx-get="/ui/tab/chat/{{ c.wa_id }}" hx-target="#content" hx-swap="innerHTML">
-        <div class="avatar av-{{ ['a','b','c','d','e'][loop.index0 % 5] }}">
-            {{ (c.customer_name or c.wa_id)[0:1].upper() }}
+        <div data-conv="{{ c.customer_name or c.wa_id }}"
+             class="flex items-center gap-3.5 px-4 py-3 bg-white rounded-lg cursor-pointer
+                    hover:bg-gray-50 transition-colors"
+             hx-get="/ui/tab/chat/{{ c.wa_id }}" hx-target="#content" hx-swap="innerHTML">
+            <div class="w-11 h-11 rounded-full flex items-center justify-center text-white
+                        font-semibold text-lg shrink-0 {{ colors[loop.index0 % 5] }}">
+                {{ (c.customer_name or c.wa_id)[0:1].upper() }}
+            </div>
+            <div class="flex-1 min-w-0">
+                <div class="font-semibold text-sm truncate">{{ c.customer_name or c.wa_id }}</div>
+                <div class="text-xs text-gray-500 truncate mt-0.5">{{ c.last_user_message or 'No messages yet' }}</div>
+            </div>
+            <div class="text-right shrink-0">
+                <div class="text-[11px] text-gray-400">{{ c.last_message_at[:16] if c.last_message_at else '' }}</div>
+                <span class="inline-block mt-1 bg-green-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+                    {{ c.message_count }}
+                </span>
+            </div>
         </div>
-        <div class="conv-info">
-            <div class="conv-name">{{ c.customer_name or c.wa_id }}</div>
-            <div class="conv-preview">{{ c.last_user_message or 'No messages yet' }}</div>
-        </div>
-        <div class="conv-meta">
-            <div class="conv-time">{{ c.last_message_at[:16] if c.last_message_at else '' }}</div>
-            <div class="badge">{{ c.message_count }}</div>
-        </div>
-    </div>
     {% endfor %}
+    </div>
 {% else %}
-    <div class="empty">
-        <h4>No conversations yet</h4>
-        <p>Conversations appear when customers message the WhatsApp bot.</p>
+    <div class="text-center py-16 text-gray-400">
+        <h4 class="text-gray-700 font-semibold mb-1">No conversations yet</h4>
+        <p class="text-sm">Conversations appear when customers message the WhatsApp bot.</p>
     </div>
 {% endif %}
 """
@@ -300,49 +182,62 @@ CONVERSATIONS_TAB = """
 # ──────────────────────────── TAB: CHAT DETAIL ────────────────────────────
 
 CHAT_DETAIL_TAB = """
-<div class="card" style="padding:0; overflow:hidden;">
-    <div class="chat-header">
-        <span class="back" hx-get="/ui/tab/conversations" hx-target="#content" hx-swap="innerHTML"
-              onclick="document.querySelector('[data-tab=conversations]').classList.add('active');
-                       document.querySelectorAll('.tab-btn:not([data-tab=conversations])').forEach(b=>b.classList.remove('active'));">&larr;</span>
-        <div>
-            <div style="font-weight:600">{{ customer_name or 'Unknown' }}</div>
-            <div style="font-size:12px;opacity:.8">{{ wa_id }} &middot; {{ messages|length }} messages</div>
+<div class="bg-white rounded-xl shadow-sm overflow-hidden">
+    <!-- Chat Header -->
+    <div class="bg-wa text-white px-5 py-3 flex items-center gap-3">
+        <span class="cursor-pointer text-xl hover:opacity-80 transition-opacity"
+              hx-get="/ui/tab/conversations" hx-target="#content" hx-swap="innerHTML"
+              onclick="document.querySelector('[data-tab=conversations]').click()">&larr;</span>
+        <div class="flex-1">
+            <div class="font-semibold">{{ customer_name or 'Unknown' }}</div>
+            <div class="text-xs text-white/70">{{ wa_id }} &middot; {{ messages|length }} messages</div>
         </div>
-        <div style="margin-left:auto">
-            <button class="btn btn-sm" style="background:rgba(255,255,255,.2);color:white"
-                    hx-get="/ui/tab/chat/{{ wa_id }}" hx-target="#content" hx-swap="innerHTML">
-                Refresh
-            </button>
-        </div>
+        <button class="text-xs bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-md
+                       font-medium transition-colors"
+                hx-get="/ui/tab/chat/{{ wa_id }}" hx-target="#content" hx-swap="innerHTML">
+            Refresh
+        </button>
     </div>
-    <div class="chat-body" id="chatBody">
+
+    <!-- Messages -->
+    <div class="bg-wa-bg px-5 py-4 max-h-[60vh] overflow-y-auto chat-scroll" id="chatBody">
         {% set prev_date = namespace(val='') %}
         {% for m in messages %}
             {% set md = m.created_at[:10] if m.created_at else '' %}
             {% if md != prev_date.val %}
-                <div class="date-sep"><span>{{ md }}</span></div>
+                <div class="text-center my-3.5">
+                    <span class="bg-sky-100 text-gray-600 text-[11px] px-3 py-1 rounded-lg">{{ md }}</span>
+                </div>
                 {% set prev_date.val = md %}
             {% endif %}
 
             {% if m.role == 'tool' %}
-                <div class="msg msg-tool">
-                    <span style="background:#ffc107;color:#333;font-size:10px;font-weight:600;padding:1px 6px;border-radius:3px">TOOL{% if m.tool_call_id %} {{ m.tool_call_id[:10] }}{% endif %}</span>
-                    <pre style="white-space:pre-wrap;margin:4px 0 0">{{ m.content[:400] if m.content else '' }}{% if m.content and m.content|length > 400 %}...{% endif %}</pre>
-                    <div class="msg-time">{{ m.created_at[11:16] if m.created_at else '' }}</div>
+                <div class="max-w-[85%] mb-1 mr-auto">
+                    <div class="bg-amber-50 border-l-[3px] border-amber-400 rounded-lg rounded-tl-none
+                                px-3 py-2 shadow-sm font-mono text-[11px]">
+                        <span class="bg-amber-400 text-amber-900 text-[10px] font-semibold px-1.5 py-0.5 rounded">
+                            TOOL{% if m.tool_call_id %} {{ m.tool_call_id[:10] }}{% endif %}
+                        </span>
+                        <pre class="whitespace-pre-wrap mt-1 text-gray-700">{{ m.content[:400] if m.content else '' }}{% if m.content and m.content|length > 400 %}...{% endif %}</pre>
+                        <div class="text-[10px] text-gray-400 text-right mt-1">{{ m.created_at[11:16] if m.created_at else '' }}</div>
+                    </div>
                 </div>
             {% elif m.role == 'assistant' %}
-                <div class="msg msg-ai">
-                    <div class="msg-role">AI Agent</div>
-                    {{ m.content or '' }}
-                    {% if m.tool_calls %}<div style="font-size:11px;color:#667781;margin-top:4px;font-style:italic">Tools: {{ m.tool_calls }}</div>{% endif %}
-                    <div class="msg-time">{{ m.created_at[11:16] if m.created_at else '' }}</div>
+                <div class="max-w-[70%] mb-1 mr-auto">
+                    <div class="bg-white rounded-lg rounded-tl-none px-3 py-2 shadow-sm text-[13px] leading-relaxed">
+                        <div class="text-[10px] uppercase font-semibold text-gray-400 tracking-wider mb-0.5">AI Agent</div>
+                        <div class="text-gray-800">{{ m.content or '' }}</div>
+                        {% if m.tool_calls %}<div class="text-[11px] text-gray-400 italic mt-1">Tools: {{ m.tool_calls }}</div>{% endif %}
+                        <div class="text-[10px] text-gray-400 text-right mt-1">{{ m.created_at[11:16] if m.created_at else '' }}</div>
+                    </div>
                 </div>
             {% elif m.role == 'user' %}
-                <div class="msg msg-user">
-                    <div class="msg-role">Customer</div>
-                    {{ m.content or '[no text]' }}
-                    <div class="msg-time">{{ m.created_at[11:16] if m.created_at else '' }}</div>
+                <div class="max-w-[70%] mb-1 ml-auto">
+                    <div class="bg-wa-bubble rounded-lg rounded-tr-none px-3 py-2 shadow-sm text-[13px] leading-relaxed">
+                        <div class="text-[10px] uppercase font-semibold text-gray-400 tracking-wider mb-0.5">Customer</div>
+                        <div class="text-gray-800">{{ m.content or '[no text]' }}</div>
+                        <div class="text-[10px] text-gray-400 text-right mt-1">{{ m.created_at[11:16] if m.created_at else '' }}</div>
+                    </div>
                 </div>
             {% endif %}
         {% endfor %}
@@ -357,41 +252,44 @@ CHAT_DETAIL_TAB = """
 
 TEMPLATES_TAB = """
 {% if error %}
-    <div class="alert alert-err">{{ error }}</div>
+    <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">{{ error }}</div>
 {% endif %}
 
-<div class="card">
-    <h3>Message Templates ({{ templates|length }})</h3>
+<div class="bg-white rounded-xl shadow-sm p-5">
+    <h3 class="text-sm font-semibold text-wa mb-4">Message Templates ({{ templates|length }})</h3>
     {% if templates %}
-    <div style="overflow-x:auto">
-        <table class="tpl-table">
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
             <thead>
-                <tr>
-                    <th>Name</th>
-                    <th>Category</th>
-                    <th>Language</th>
-                    <th>Status</th>
-                    <th>Body</th>
-                    <th></th>
+                <tr class="border-b-2 border-gray-200">
+                    <th class="text-left text-[11px] uppercase text-gray-400 font-semibold px-3 py-2">Name</th>
+                    <th class="text-left text-[11px] uppercase text-gray-400 font-semibold px-3 py-2">Category</th>
+                    <th class="text-left text-[11px] uppercase text-gray-400 font-semibold px-3 py-2">Language</th>
+                    <th class="text-left text-[11px] uppercase text-gray-400 font-semibold px-3 py-2">Status</th>
+                    <th class="text-left text-[11px] uppercase text-gray-400 font-semibold px-3 py-2">Body</th>
+                    <th class="px-3 py-2"></th>
                 </tr>
             </thead>
             <tbody>
                 {% for t in templates %}
-                <tr>
-                    <td style="font-weight:600">{{ t.name }}</td>
-                    <td>{{ t.category or '—' }}</td>
-                    <td>{{ t.language or '—' }}</td>
-                    <td>
+                <tr class="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                    <td class="px-3 py-2.5 font-semibold text-gray-800">{{ t.name }}</td>
+                    <td class="px-3 py-2.5 text-gray-600">{{ t.category or '—' }}</td>
+                    <td class="px-3 py-2.5 text-gray-600">{{ t.language or '—' }}</td>
+                    <td class="px-3 py-2.5">
                         {% set st = (t.status or '')|lower %}
-                        <span class="status-badge {% if st=='approved' %}st-approved{% elif st=='rejected' %}st-rejected{% elif st=='pending' %}st-pending{% else %}st-other{% endif %}">
+                        <span class="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold uppercase
+                            {% if st=='approved' %}bg-green-100 text-green-700
+                            {% elif st=='rejected' %}bg-red-100 text-red-700
+                            {% elif st=='pending' %}bg-yellow-100 text-yellow-700
+                            {% else %}bg-gray-100 text-gray-500{% endif %}">
                             {{ t.status or 'UNKNOWN' }}
                         </span>
                     </td>
-                    <td style="max-width:280px;font-size:12px;color:#555">
-                        {{ t.body_text or '—' }}
-                    </td>
-                    <td>
-                        <button class="btn btn-danger btn-sm"
+                    <td class="px-3 py-2.5 text-xs text-gray-500 max-w-[280px] truncate">{{ t.body_text or '—' }}</td>
+                    <td class="px-3 py-2.5">
+                        <button class="bg-red-500 hover:bg-red-600 text-white text-xs font-semibold
+                                       px-3 py-1 rounded-md transition-colors"
                                 hx-delete="/ui/api/templates/{{ t.name }}"
                                 hx-target="#content" hx-swap="innerHTML"
                                 hx-confirm="Delete template '{{ t.name }}'? This cannot be undone.">
@@ -404,7 +302,10 @@ TEMPLATES_TAB = """
         </table>
     </div>
     {% else %}
-        <div class="empty"><h4>No templates found</h4><p>Create one using the "Create Template" tab.</p></div>
+        <div class="text-center py-14 text-gray-400">
+            <h4 class="text-gray-700 font-semibold mb-1">No templates found</h4>
+            <p class="text-sm">Create one using the "Create Template" tab.</p>
+        </div>
     {% endif %}
 </div>
 """
@@ -412,29 +313,35 @@ TEMPLATES_TAB = """
 # ──────────────────────────── TAB: CREATE TEMPLATE ────────────────────────────
 
 CREATE_TEMPLATE_TAB = """
-<div class="card">
-    <h3>Create a New WhatsApp Template</h3>
+<div class="bg-white rounded-xl shadow-sm p-5">
+    <h3 class="text-sm font-semibold text-wa mb-4">Create a New WhatsApp Template</h3>
     <div id="createResult"></div>
-    <form class="form-grid"
+    <form class="grid grid-cols-1 sm:grid-cols-2 gap-3"
           hx-post="/ui/api/templates" hx-target="#createResult" hx-swap="innerHTML"
           hx-disabled-elt="button[type=submit]">
         <div>
-            <label>Template Name</label>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Template Name</label>
             <input type="text" name="name" placeholder="e.g. order_update" required pattern="[a-z0-9_]+"
-                   title="Lowercase letters, numbers, and underscores only">
-            <div class="hint">Lowercase, no spaces. e.g. booking_confirm</div>
+                   title="Lowercase letters, numbers, and underscores only"
+                   class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
+                          focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors">
+            <p class="text-[11px] text-gray-400 mt-1">Lowercase, no spaces. e.g. booking_confirm</p>
         </div>
         <div>
-            <label>Category</label>
-            <select name="category" required>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Category</label>
+            <select name="category" required
+                    class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
+                           focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors bg-white">
                 <option value="MARKETING">Marketing</option>
                 <option value="UTILITY" selected>Utility</option>
                 <option value="AUTHENTICATION">Authentication</option>
             </select>
         </div>
         <div>
-            <label>Language</label>
-            <select name="language" required>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Language</label>
+            <select name="language" required
+                    class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
+                           focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors bg-white">
                 <option value="en_US" selected>English (US)</option>
                 <option value="en_GB">English (UK)</option>
                 <option value="af">Afrikaans</option>
@@ -445,22 +352,32 @@ CREATE_TEMPLATE_TAB = """
             </select>
         </div>
         <div>
-            <label>Header (optional)</label>
-            <input type="text" name="header_text" placeholder="e.g. Booking Confirmation">
+            <label class="block text-xs font-medium text-gray-500 mb-1">Header (optional)</label>
+            <input type="text" name="header_text" placeholder="e.g. Booking Confirmation"
+                   class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
+                          focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors">
         </div>
-        <div class="full">
-            <label>Body Text</label>
-            <textarea name="body_text" required
-                      placeholder="Your booking {{1}} is confirmed for {{2}}.&#10;&#10;Use {{1}}, {{2}}, etc. for variables."></textarea>
-            <div class="hint">Use &#123;&#123;1&#125;&#125;, &#123;&#123;2&#125;&#125; for dynamic variables</div>
+        <div class="sm:col-span-2">
+            <label class="block text-xs font-medium text-gray-500 mb-1">Body Text</label>
+            <textarea name="body_text" required rows="3"
+                      placeholder="Your booking {{1}} is confirmed for {{2}}.&#10;&#10;Use {{1}}, {{2}}, etc. for variables."
+                      class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
+                             focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors resize-y min-h-[80px]"></textarea>
+            <p class="text-[11px] text-gray-400 mt-1">Use &#123;&#123;1&#125;&#125;, &#123;&#123;2&#125;&#125; for dynamic variables</p>
         </div>
-        <div class="full">
-            <label>Footer (optional)</label>
-            <input type="text" name="footer_text" placeholder="e.g. DriveEasy Car Rentals">
+        <div class="sm:col-span-2">
+            <label class="block text-xs font-medium text-gray-500 mb-1">Footer (optional)</label>
+            <input type="text" name="footer_text" placeholder="e.g. DriveEasy Car Rentals"
+                   class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
+                          focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors">
         </div>
-        <div class="full" style="text-align:right; margin-top:8px;">
-            <button type="submit" class="btn btn-primary">
-                Create Template <span class="htmx-indicator spinner"></span>
+        <div class="sm:col-span-2 text-right mt-2">
+            <button type="submit"
+                    class="bg-wa hover:bg-wa-dark text-white font-semibold text-sm px-6 py-2.5
+                           rounded-md transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
+                Create Template
+                <span class="htmx-indicator inline-block w-4 h-4 border-2 border-white/30 border-t-white
+                             rounded-full spinner ml-1.5 align-middle"></span>
             </button>
         </div>
     </form>
@@ -470,41 +387,53 @@ CREATE_TEMPLATE_TAB = """
 # ──────────────────────────── TAB: SEND TEMPLATE ────────────────────────────
 
 SEND_TEMPLATE_TAB = """
-<div class="card">
-    <h3>Send a Template Message</h3>
+<div class="bg-white rounded-xl shadow-sm p-5">
+    <h3 class="text-sm font-semibold text-wa mb-4">Send a Template Message</h3>
     <div id="sendResult"></div>
-    <form class="form-grid"
+    <form class="grid grid-cols-1 sm:grid-cols-2 gap-3"
           hx-post="/ui/api/send-template" hx-target="#sendResult" hx-swap="innerHTML"
           hx-disabled-elt="button[type=submit]">
         <div>
-            <label>Template Name</label>
-            <input type="text" name="template_name" placeholder="e.g. demo" value="demo" required>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Template Name</label>
+            <input type="text" name="template_name" placeholder="e.g. demo" value="demo" required
+                   class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
+                          focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors">
         </div>
         <div>
-            <label>Recipient Phone Number</label>
-            <input type="text" name="phone_number" placeholder="e.g. 27821234567" required>
-            <div class="hint">With country code, no + or spaces</div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Recipient Phone Number</label>
+            <input type="text" name="phone_number" placeholder="e.g. 27821234567" required
+                   class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
+                          focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors">
+            <p class="text-[11px] text-gray-400 mt-1">With country code, no + or spaces</p>
         </div>
         <div>
-            <label>Language</label>
-            <input type="text" name="language" value="en_US">
+            <label class="block text-xs font-medium text-gray-500 mb-1">Language</label>
+            <input type="text" name="language" value="en_US"
+                   class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
+                          focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors">
         </div>
         <div>
-            <label>Body Variables (comma-separated)</label>
-            <input type="text" name="variables" placeholder="e.g. #12345, try a redelivery">
-            <div class="hint">Leave empty if template has no variables</div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Body Variables (comma-separated)</label>
+            <input type="text" name="variables" placeholder="e.g. #12345, try a redelivery"
+                   class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
+                          focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors">
+            <p class="text-[11px] text-gray-400 mt-1">Leave empty if template has no variables</p>
         </div>
-        <div class="full" style="text-align:right; margin-top:8px;">
-            <button type="submit" class="btn btn-primary">
-                Send Template <span class="htmx-indicator spinner"></span>
+        <div class="sm:col-span-2 text-right mt-2">
+            <button type="submit"
+                    class="bg-wa hover:bg-wa-dark text-white font-semibold text-sm px-6 py-2.5
+                           rounded-md transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
+                Send Template
+                <span class="htmx-indicator inline-block w-4 h-4 border-2 border-white/30 border-t-white
+                             rounded-full spinner ml-1.5 align-middle"></span>
             </button>
         </div>
     </form>
 </div>
 """
 
-# ════════════════════════════ ROUTES ════════════════════════════
 
+# ════════════════════════════ ROUTES ════════════════════════════
 
 @router.get("", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -512,15 +441,11 @@ async def dashboard(request: Request):
     return HTMLResponse(content=SHELL_HTML)
 
 
-# ──── tab partials ────
-
-
 @router.get("/tab/conversations", response_class=HTMLResponse)
 async def tab_conversations():
     conversations = await get_all_conversations()
 
-    total_messages = await fetch_one(
-        "SELECT COUNT(*) as count FROM conversations")
+    total_messages = await fetch_one("SELECT COUNT(*) as count FROM conversations")
     total_bookings = await fetch_one("SELECT COUNT(*) as count FROM bookings")
     revenue = await fetch_one(
         "SELECT COALESCE(SUM(total_price), 0) as total FROM bookings WHERE status != 'cancelled'"
@@ -534,22 +459,18 @@ async def tab_conversations():
 
     from jinja2 import Template
     t = Template(CONVERSATIONS_TAB)
-    return HTMLResponse(
-        content=t.render(conversations=conversations, stats=stats))
+    return HTMLResponse(content=t.render(conversations=conversations, stats=stats))
 
 
 @router.get("/tab/chat/{wa_id}", response_class=HTMLResponse)
 async def tab_chat(wa_id: str):
     messages = await get_conversation_messages(wa_id, limit=500)
-    customer = await fetch_one("SELECT name FROM customers WHERE wa_id = ?",
-                               (wa_id, ))
-    customer_name = customer["name"] if customer and customer.get(
-        "name") else None
+    customer = await fetch_one("SELECT name FROM customers WHERE wa_id = ?", (wa_id,))
+    customer_name = customer["name"] if customer and customer.get("name") else None
 
     from jinja2 import Template
     t = Template(CHAT_DETAIL_TAB)
-    return HTMLResponse(content=t.render(
-        wa_id=wa_id, customer_name=customer_name, messages=messages))
+    return HTMLResponse(content=t.render(wa_id=wa_id, customer_name=customer_name, messages=messages))
 
 
 @router.get("/tab/templates", response_class=HTMLResponse)
@@ -576,8 +497,7 @@ async def tab_templates():
 
     from jinja2 import Template
     t = Template(TEMPLATES_TAB)
-    return HTMLResponse(
-        content=t.render(templates=templates_data, error=error))
+    return HTMLResponse(content=t.render(templates=templates_data, error=error))
 
 
 @router.get("/tab/create-template", response_class=HTMLResponse)
@@ -592,15 +512,14 @@ async def tab_send_template():
 
 # ──── API actions (return HTML snippets for htmx) ────
 
-
 @router.post("/api/templates", response_class=HTMLResponse)
 async def api_create_template(
-        name: str = Form(...),
-        category: str = Form("UTILITY"),
-        language: str = Form("en_US"),
-        header_text: str = Form(""),
-        body_text: str = Form(...),
-        footer_text: str = Form(""),
+    name: str = Form(...),
+    category: str = Form("UTILITY"),
+    language: str = Form("en_US"),
+    header_text: str = Form(""),
+    body_text: str = Form(...),
+    footer_text: str = Form(""),
 ):
     try:
         result = await create_template(
@@ -613,24 +532,26 @@ async def api_create_template(
         )
         tid = result.get("id", "")
         return HTMLResponse(
-            f'<div class="alert alert-ok">Template <b>{name}</b> created successfully! ID: {tid}. '
-            f'It will be reviewed by Meta before becoming active.</div>')
+            '<div class="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-4 text-sm">'
+            f'Template <b>{name}</b> created successfully! ID: {tid}. '
+            f'It will be reviewed by Meta before becoming active.</div>'
+        )
     except Exception as e:
         return HTMLResponse(
-            f'<div class="alert alert-err">Failed to create template: {e}</div>'
+            f'<div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">'
+            f'Failed to create template: {e}</div>'
         )
 
 
 @router.post("/api/send-template", response_class=HTMLResponse)
 async def api_send_template(
-        template_name: str = Form(...),
-        phone_number: str = Form(...),
-        language: str = Form("en_US"),
-        variables: str = Form(""),
+    template_name: str = Form(...),
+    phone_number: str = Form(...),
+    language: str = Form("en_US"),
+    variables: str = Form(""),
 ):
     try:
-        body_params = [v.strip() for v in variables.split(",")
-                       if v.strip()] if variables.strip() else None
+        body_params = [v.strip() for v in variables.split(",") if v.strip()] if variables.strip() else None
         await send_template_message(
             to=phone_number,
             template_name=template_name,
@@ -638,11 +559,14 @@ async def api_send_template(
             body_parameters=body_params,
         )
         return HTMLResponse(
-            f'<div class="alert alert-ok">Template <b>{template_name}</b> sent to {phone_number} successfully!</div>'
+            '<div class="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-4 text-sm">'
+            f'Template <b>{template_name}</b> sent to {phone_number} successfully!</div>'
         )
     except Exception as e:
         return HTMLResponse(
-            f'<div class="alert alert-err">Failed to send: {e}</div>')
+            f'<div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">'
+            f'Failed to send: {e}</div>'
+        )
 
 
 @router.delete("/api/templates/{template_name}", response_class=HTMLResponse)
@@ -651,7 +575,7 @@ async def api_delete_template(template_name: str):
         await delete_template(template_name)
     except Exception as e:
         return HTMLResponse(
-            f'<div class="alert alert-err">Delete failed: {e}</div>')
-
-    # Re-render the templates tab
+            f'<div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">'
+            f'Delete failed: {e}</div>'
+        )
     return await tab_templates()
