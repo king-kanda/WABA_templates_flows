@@ -1,5 +1,6 @@
 """WhatsApp webhook endpoints - verification and incoming messages."""
 
+import json
 import logging
 import asyncio
 import time
@@ -11,6 +12,7 @@ from app.services.whatsapp import mark_as_read
 from app.services.groq_agent import process_message
 from app.services.whatsapp import send_text_message
 from app.services.document import handle_document_upload
+from app.services.conversation import save_message
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhook"])
@@ -168,11 +170,144 @@ async def _process_incoming(wa_id: str, message: dict, msg_type: str):
 
         elif msg_type == "interactive":
             interactive = message.get("interactive", {})
-            if interactive.get("type") == "button_reply":
-                user_text = interactive.get("button_reply",
-                                            {}).get("title", "")
-            elif interactive.get("type") == "list_reply":
-                user_text = interactive.get("list_reply", {}).get("title", "")
+            reply_type = interactive.get("type", "")
+
+            if reply_type == "list_reply":
+                list_reply = interactive.get("list_reply", {})
+                picked_id = list_reply.get("id", "")
+                picked_title = list_reply.get("title", "")
+                picked_desc = list_reply.get("description", "")
+
+                # Save the customer's pick
+                user_pick = f"[Selected: {picked_title}]"
+                if picked_desc:
+                    user_pick += f" — {picked_desc}"
+                await save_message(wa_id, "user", user_pick)
+
+                # Send acknowledgment
+                ack = (
+                    f"✅ *Great choice!*\n\n"
+                    f"You selected: *{picked_title}*\n"
+                )
+                if picked_desc:
+                    ack += f"_{picked_desc}_\n"
+                ack += (
+                    f"\n⏳ We're now processing your *{picked_title}* request. "
+                    f"Please hold on while we set things up for you…"
+                )
+                await send_text_message(wa_id, ack)
+                await save_message(wa_id, "assistant", ack)
+
+                # Simulate processing delay then send follow-up
+                await asyncio.sleep(3)
+
+                followup = (
+                    f"🔔 *Update on your request*\n\n"
+                    f"Your *{picked_title}* request (ref: DE-{wa_id[-4:]}-{picked_id.upper()[:6]}) "
+                    f"has been received and is being reviewed by our team.\n\n"
+                    f"📋 *Next steps:*\n"
+                    f"1️⃣ A DriveEasy agent will be assigned shortly\n"
+                    f"2️⃣ You'll receive a confirmation within 24 hours\n"
+                    f"3️⃣ We may reach out if we need more details\n\n"
+                    f"Feel free to message us anytime if you have questions! 💬"
+                )
+                await send_text_message(wa_id, followup)
+                await save_message(wa_id, "assistant", followup)
+                return  # handled directly, skip AI agent
+
+            elif reply_type == "button_reply":
+                btn_reply = interactive.get("button_reply", {})
+                picked_title = btn_reply.get("title", "")
+                picked_id = btn_reply.get("id", "")
+
+                # Save the customer's pick
+                await save_message(wa_id, "user", f"[Tapped: {picked_title}]")
+
+                ack = (
+                    f"✅ *Got it!*\n\n"
+                    f"You tapped: *{picked_title}*\n\n"
+                    f"⏳ Processing your selection, one moment please…"
+                )
+                await send_text_message(wa_id, ack)
+                await save_message(wa_id, "assistant", ack)
+
+                await asyncio.sleep(2)
+
+                followup = (
+                    f"🔔 *All set!*\n\n"
+                    f"Your *{picked_title}* action (ref: DE-{wa_id[-4:]}-{picked_id.upper()[:6]}) "
+                    f"has been registered.\n\n"
+                    f"We'll follow up with more details shortly. 💬"
+                )
+                await send_text_message(wa_id, followup)
+                await save_message(wa_id, "assistant", followup)
+                return  # handled directly, skip AI agent
+
+            elif reply_type == "nfm_reply":
+                # WhatsApp Flow completion response
+                nfm = interactive.get("nfm_reply", {})
+                response_json_str = nfm.get("response_json", "{}")
+                flow_name = nfm.get("name", "flow")
+                flow_body = nfm.get("body", "")
+
+                # Parse the flow response data
+                try:
+                    flow_data = json.loads(response_json_str)
+                except (json.JSONDecodeError, TypeError):
+                    flow_data = {}
+
+                logger.info(f"Flow response from {wa_id}: name={flow_name}, data={flow_data}")
+
+                # Remove internal/meta keys
+                display_data = {
+                    k: v for k, v in flow_data.items()
+                    if k not in ("flow_token",) and v
+                }
+
+                # Save the raw flow submission as user message
+                summary_lines = []
+                for key, val in display_data.items():
+                    label = key.replace("_", " ").replace("-", " ").title()
+                    summary_lines.append(f"• *{label}:* {val}")
+
+                user_summary = f"[Flow completed: {flow_name}]"
+                if summary_lines:
+                    user_summary += "\n" + "\n".join(summary_lines)
+                await save_message(wa_id, "user", user_summary)
+
+                # Build a nice acknowledgment echoing back what they submitted
+                ack = f"✅ *Thank you for completing the form!*\n\n"
+                if display_data:
+                    ack += "📝 *Here's what you submitted:*\n"
+                    for key, val in display_data.items():
+                        label = key.replace("_", " ").replace("-", " ").title()
+                        ack += f"  • *{label}:* {val}\n"
+                    ack += "\n"
+                ack += "⏳ We're processing your submission now, please hold on…"
+
+                await send_text_message(wa_id, ack)
+                await save_message(wa_id, "assistant", ack)
+
+                # Simulate processing
+                await asyncio.sleep(4)
+
+                ref = f"DE-{wa_id[-4:]}-FLW{hash(response_json_str) % 10000:04d}"
+                followup = (
+                    f"🔔 *Your submission has been received!*\n\n"
+                    f"Reference: *{ref}*\n\n"
+                    f"📋 *What happens next:*\n"
+                    f"1️⃣ Our team will review your details\n"
+                    f"2️⃣ You'll get a confirmation within 24 hours\n"
+                    f"3️⃣ If we need anything else, we'll reach out here\n\n"
+                    f"You can continue chatting with us anytime! 💬"
+                )
+                await send_text_message(wa_id, followup)
+                await save_message(wa_id, "assistant", followup)
+                return  # handled directly, skip AI agent
+
+            else:
+                # Unknown interactive type → pass to AI
+                user_text = f"[Interactive reply: {reply_type}]"
 
         elif msg_type == "reaction":
             # Ignore reactions

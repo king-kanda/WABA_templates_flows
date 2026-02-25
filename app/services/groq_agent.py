@@ -57,7 +57,7 @@ async def process_message(wa_id: str,
                 tools=TOOLS,
                 tool_choice="auto",
                 max_tokens=1024,
-                temperature=0.7,
+                temperature=0.3,
             )
         except Exception as e:
             logger.error(f"Groq API error: {e}")
