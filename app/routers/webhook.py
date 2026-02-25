@@ -185,16 +185,13 @@ async def _process_incoming(wa_id: str, message: dict, msg_type: str):
                 await save_message(wa_id, "user", user_pick)
 
                 # Send acknowledgment
-                ack = (
-                    f"✅ *Great choice!*\n\n"
-                    f"You selected: *{picked_title}*\n"
-                )
+                ack = (f"✅ *Great choice!*\n\n"
+                       f"You selected: *{picked_title}*\n")
                 if picked_desc:
                     ack += f"_{picked_desc}_\n"
                 ack += (
                     f"\n⏳ We're now processing your *{picked_title}* request. "
-                    f"Please hold on while we set things up for you…"
-                )
+                    f"Please hold on while we set things up for you…")
                 await send_text_message(wa_id, ack)
                 await save_message(wa_id, "assistant", ack)
 
@@ -223,11 +220,9 @@ async def _process_incoming(wa_id: str, message: dict, msg_type: str):
                 # Save the customer's pick
                 await save_message(wa_id, "user", f"[Tapped: {picked_title}]")
 
-                ack = (
-                    f"✅ *Got it!*\n\n"
-                    f"You tapped: *{picked_title}*\n\n"
-                    f"⏳ Processing your selection, one moment please…"
-                )
+                ack = (f"✅ *Got it!*\n\n"
+                       f"You tapped: *{picked_title}*\n\n"
+                       f"⏳ Processing your selection, one moment please…")
                 await send_text_message(wa_id, ack)
                 await save_message(wa_id, "assistant", ack)
 
@@ -237,8 +232,7 @@ async def _process_incoming(wa_id: str, message: dict, msg_type: str):
                     f"🔔 *All set!*\n\n"
                     f"Your *{picked_title}* action (ref: DE-{wa_id[-4:]}-{picked_id.upper()[:6]}) "
                     f"has been registered.\n\n"
-                    f"We'll follow up with more details shortly. 💬"
-                )
+                    f"We'll follow up with more details shortly. 💬")
                 await send_text_message(wa_id, followup)
                 await save_message(wa_id, "assistant", followup)
                 return  # handled directly, skip AI agent
@@ -256,12 +250,15 @@ async def _process_incoming(wa_id: str, message: dict, msg_type: str):
                 except (json.JSONDecodeError, TypeError):
                     flow_data = {}
 
-                logger.info(f"Flow response from {wa_id}: name={flow_name}, data={flow_data}")
+                logger.info(
+                    f"Flow response from {wa_id}: name={flow_name}, data={flow_data}"
+                )
 
                 # Remove internal/meta keys
                 display_data = {
-                    k: v for k, v in flow_data.items()
-                    if k not in ("flow_token",) and v
+                    k: v
+                    for k, v in flow_data.items()
+                    if k not in ("flow_token", ) and v
                 }
 
                 # Save the raw flow submission as user message
@@ -299,8 +296,7 @@ async def _process_incoming(wa_id: str, message: dict, msg_type: str):
                     f"1️⃣ Our team will review your details\n"
                     f"2️⃣ You'll get a confirmation within 24 hours\n"
                     f"3️⃣ If we need anything else, we'll reach out here\n\n"
-                    f"You can continue chatting with us anytime! 💬"
-                )
+                    f"You can continue chatting with us anytime! 💬")
                 await send_text_message(wa_id, followup)
                 await save_message(wa_id, "assistant", followup)
                 return  # handled directly, skip AI agent
