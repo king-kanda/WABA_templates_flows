@@ -4,7 +4,7 @@ import logging
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
 from app.services.conversation import get_all_conversations, get_conversation_messages
-from app.services.whatsapp import send_template_message, list_templates, create_template, delete_template, send_interactive_list
+from app.services.whatsapp import send_template_message, list_templates, create_template, delete_template, send_interactive_list, _has_flow_button
 from app.database import fetch_one
 
 logger = logging.getLogger(__name__)
@@ -396,15 +396,27 @@ CREATE_TEMPLATE_TAB = """
 SEND_TEMPLATE_TAB = """
 <div class="bg-white rounded-xl shadow-sm p-5">
     <h3 class="text-sm font-semibold text-wa mb-4">Send a Template Message</h3>
+    {% if error %}
+        <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4 text-sm">{{ error }}</div>
+    {% endif %}
     <div id="sendResult"></div>
     <form class="grid grid-cols-1 sm:grid-cols-2 gap-3"
           hx-post="/ui/api/send-template" hx-target="#sendResult" hx-swap="innerHTML"
           hx-disabled-elt="button[type=submit]">
         <div>
             <label class="block text-xs font-medium text-gray-500 mb-1">Template Name</label>
-            <input type="text" name="template_name" placeholder="e.g. demo" value="demo" required
-                   class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
-                          focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors">
+            <select name="template_name" id="templateSelect" required
+                    onchange="onTemplateNameChange(this)"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
+                           focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors bg-white">
+                <option value="" disabled selected>\u2014 Select a template \u2014</option>
+                {% for name in template_names %}
+                <option value="{{ name }}">{{ name }}{% if grouped[name][0].status != 'APPROVED' %} ({{ grouped[name][0].status }}){% endif %}</option>
+                {% endfor %}
+            </select>
+            {% if not template_names %}
+                <p class="text-[11px] text-amber-500 mt-1">No templates found \u2014 create one first</p>
+            {% endif %}
         </div>
         <div>
             <label class="block text-xs font-medium text-gray-500 mb-1">Recipient Phone Number</label>
@@ -415,9 +427,13 @@ SEND_TEMPLATE_TAB = """
         </div>
         <div>
             <label class="block text-xs font-medium text-gray-500 mb-1">Language</label>
-            <input type="text" name="language" value="en_US"
-                   class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
-                          focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors">
+            <select name="language" id="langSelect" required
+                    onchange="onLangChange(this)"
+                    class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
+                           focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors bg-white">
+                <option value="" disabled selected>\u2014 Pick a template first \u2014</option>
+            </select>
+            <p class="text-[11px] text-gray-400 mt-1">Languages registered for the selected template</p>
         </div>
         <div>
             <label class="block text-xs font-medium text-gray-500 mb-1">Body Variables (comma-separated)</label>
@@ -425,6 +441,24 @@ SEND_TEMPLATE_TAB = """
                    class="w-full px-3 py-2 border border-gray-200 rounded-md text-sm outline-none
                           focus:border-wa focus:ring-1 focus:ring-wa/30 transition-colors">
             <p class="text-[11px] text-gray-400 mt-1">Leave empty if template has no variables</p>
+        </div>
+        <input type="hidden" name="has_flow" id="hasFlowInput" value="0">
+        <!-- Template info badges -->
+        <div class="sm:col-span-2" id="tplBadges" style="display:none">
+            <span id="flowBadge" style="display:none"
+                  class="inline-block bg-blue-100 text-blue-700 text-[11px] font-semibold px-2 py-0.5 rounded-full">
+                \u26a1 Flow Button
+            </span>
+            <span id="noFlowBadge" style="display:none"
+                  class="inline-block bg-gray-100 text-gray-500 text-[11px] font-semibold px-2 py-0.5 rounded-full">
+                Standard Template (no flow)
+            </span>
+        </div>
+        <!-- Template body preview -->
+        <div class="sm:col-span-2" id="tplPreview" style="display:none">
+            <label class="block text-xs font-medium text-gray-500 mb-1">Template Body Preview</label>
+            <div id="tplPreviewBody" class="bg-gray-50 border border-gray-200 rounded-md px-3 py-2
+                        text-sm text-gray-600 whitespace-pre-wrap"></div>
         </div>
         <div class="sm:col-span-2 text-right mt-2">
             <button type="submit"
@@ -437,6 +471,64 @@ SEND_TEMPLATE_TAB = """
         </div>
     </form>
 </div>
+<script>
+    // Template data grouped by name, injected from server
+    var _tplData = {{ grouped_json }};
+
+    function onTemplateNameChange(sel) {
+        var name = sel.value;
+        var langSel = document.getElementById('langSelect');
+        langSel.innerHTML = '';
+        var variants = _tplData[name] || [];
+        variants.forEach(function(v, i) {
+            var opt = document.createElement('option');
+            opt.value = v.language;
+            opt.textContent = v.language;
+            if (i === 0) opt.selected = true;
+            langSel.appendChild(opt);
+        });
+        // update preview & flow flag for first language variant
+        var first = variants.length ? variants[0] : null;
+        showPreview(first ? first.body_text : '');
+        updateFlowFlag(first);
+    }
+
+    function onLangChange(sel) {
+        var nameSel = document.getElementById('templateSelect');
+        var name = nameSel.value;
+        var variants = _tplData[name] || [];
+        var lang = sel.value;
+        var match = variants.find(function(v){ return v.language === lang; });
+        showPreview(match ? match.body_text : '');
+        updateFlowFlag(match);
+    }
+
+    function updateFlowFlag(variant) {
+        var hasFlow = variant && variant.has_flow;
+        document.getElementById('hasFlowInput').value = hasFlow ? '1' : '0';
+        var badges = document.getElementById('tplBadges');
+        var flowBadge = document.getElementById('flowBadge');
+        var noFlowBadge = document.getElementById('noFlowBadge');
+        if (variant) {
+            badges.style.display = '';
+            flowBadge.style.display = hasFlow ? '' : 'none';
+            noFlowBadge.style.display = hasFlow ? 'none' : '';
+        } else {
+            badges.style.display = 'none';
+        }
+    }
+
+    function showPreview(body) {
+        var preview = document.getElementById('tplPreview');
+        var previewBody = document.getElementById('tplPreviewBody');
+        if (body) {
+            previewBody.textContent = body;
+            preview.style.display = '';
+        } else {
+            preview.style.display = 'none';
+        }
+    }
+</script>
 """
 
 # ──────────────────────────── TAB: SEND INTERACTIVE LIST ────────────────────────────
@@ -584,7 +676,42 @@ async def tab_create_template():
 
 @router.get("/tab/send-template", response_class=HTMLResponse)
 async def tab_send_template():
-    return HTMLResponse(content=SEND_TEMPLATE_TAB)
+    import json as _json
+    error = None
+    # grouped: { template_name: [ {language, status, body_text}, ... ] }
+    grouped: dict[str, list[dict]] = {}
+    try:
+        raw = await list_templates()
+        for tpl in raw:
+            body_text = ""
+            for comp in tpl.get("components", []):
+                if comp.get("type") == "BODY":
+                    body_text = comp.get("text", "")
+                    break
+            name = tpl.get("name", "")
+            grouped.setdefault(name, []).append({
+                "language":
+                tpl.get("language", "en_US"),
+                "status":
+                tpl.get("status", ""),
+                "body_text":
+                body_text[:300],
+                "has_flow":
+                _has_flow_button(tpl),
+            })
+    except Exception as e:
+        error = str(e)[:300]
+
+    template_names = list(grouped.keys())
+
+    from jinja2 import Template
+    t = Template(SEND_TEMPLATE_TAB)
+    return HTMLResponse(content=t.render(
+        template_names=template_names,
+        grouped=grouped,
+        grouped_json=_json.dumps(grouped),
+        error=error,
+    ))
 
 
 @router.get("/tab/send-interactive", response_class=HTMLResponse)
@@ -630,6 +757,7 @@ async def api_send_template(
         phone_number: str = Form(...),
         language: str = Form("en_US"),
         variables: str = Form(""),
+        has_flow: str = Form("0"),
 ):
     try:
         body_params = [v.strip() for v in variables.split(",")
@@ -639,6 +767,7 @@ async def api_send_template(
             template_name=template_name,
             language_code=language,
             body_parameters=body_params,
+            has_flow_button=has_flow == "1",
         )
         return HTMLResponse(
             '<div class="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-4 text-sm">'

@@ -88,14 +88,31 @@ async def download_media(media_id: str) -> bytes | None:
             return None
 
 
+def _has_flow_button(template: dict) -> bool:
+    """Check if a template has a Flow button."""
+    for component in template.get("components", []):
+        if component.get("type") == "BUTTONS":
+            for btn in component.get("buttons", []):
+                if btn.get("type") == "FLOW":
+                    return True
+    return False
+
+
 async def send_template_message(
     to: str,
     template_name: str,
     language_code: str = "en_US",
     flow_token: str = "unused",
     body_parameters: list[str] | None = None,
+    has_flow_button: bool = False,
 ):
-    """Send a template message via WhatsApp Cloud API."""
+    """Send a template message via WhatsApp Cloud API.
+
+    Works for all template types:
+    - Plain templates (no buttons)
+    - Templates with regular buttons
+    - Templates with Flow buttons (set has_flow_button=True)
+    """
     settings = get_settings()
     headers = {
         "Authorization": f"Bearer {settings.meta_api_token}",
@@ -114,20 +131,21 @@ async def send_template_message(
             } for p in body_parameters],
         })
 
-    components.append({
-        "type":
-        "button",
-        "sub_type":
-        "flow",
-        "index":
-        "0",
-        "parameters": [{
-            "type": "action",
-            "action": {
-                "flow_token": flow_token
-            }
-        }],
-    })
+    if has_flow_button:
+        components.append({
+            "type":
+            "button",
+            "sub_type":
+            "flow",
+            "index":
+            "0",
+            "parameters": [{
+                "type": "action",
+                "action": {
+                    "flow_token": flow_token
+                }
+            }],
+        })
 
     payload = {
         "messaging_product": "whatsapp",
